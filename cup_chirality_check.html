@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>杯子三维重建 · 奇偶性校验</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #1a1d24;
+    --panel-2: #232730;
+    --border: #2e333d;
+    --text: #e5e7eb;
+    --text-dim: #9ca3af;
+    --green: #22c55e;
+    --green-soft: rgba(34,197,94,0.12);
+    --red: #ef4444;
+    --red-soft: rgba(239,68,68,0.14);
+    --blue: #3b82f6;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "PingFang SC", "Segoe UI", sans-serif; overflow: hidden; }
+  #app { display: grid; grid-template-columns: 1fr 320px; height: 100vh; }
+  #stage { position: relative; background: radial-gradient(circle at 50% 40%, #1c2029, #0b0d11); }
+  canvas { display: block; }
+  #badge {
+    position: absolute; top: 16px; left: 16px; padding: 10px 18px;
+    border-radius: 10px; font-weight: 700; font-size: 16px; letter-spacing: .5px;
+    border: 1.5px solid; transition: all .25s ease; z-index: 5;
+  }
+  #badge.pass { background: var(--green-soft); color: var(--green); border-color: var(--green); }
+  #badge.alarm { background: var(--red-soft); color: var(--red); border-color: var(--red);
+    animation: pulse 0.9s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.55} }
+  #legend {
+    position: absolute; bottom: 16px; left: 16px; background: rgba(0,0,0,.5);
+    padding: 10px 14px; border-radius: 8px; font-size: 13px; line-height: 1.9;
+    backdrop-filter: blur(6px); border: 1px solid var(--border);
+  }
+  #legend span { display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:8px; vertical-align:middle; }
+  .dot-x { background:#ef4444; } .dot-y { background:#22c55e; } .dot-z { background:#3b82f6; }
+
+  #panel { background: var(--panel); border-left: 1px solid var(--border);
+    padding: 20px; overflow-y: auto; }
+  #panel h1 { font-size: 18px; margin-bottom: 4px; }
+  #panel .sub { font-size: 12px; color: var(--text-dim); margin-bottom: 20px; }
+  .group { margin-bottom: 22px; }
+  .group h3 { font-size: 13px; color: var(--text-dim); text-transform: uppercase;
+    letter-spacing: .08em; margin-bottom: 12px; font-weight: 600; }
+  .row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .row label { width: 28px; font-weight: 700; font-size: 14px; }
+  .row label.x { color:#ef4444; } .row label.y { color:#22c55e; } .row label.z { color:#3b82f6; }
+  .row input[type=range] { flex: 1; accent-color: #60a5fa; }
+  .row .val { width: 46px; text-align: right; font-family: monospace; font-size: 13px; color: var(--text-dim); }
+  .mirrors { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; }
+  .mirror-btn {
+    padding: 10px 0; border-radius: 8px; border: 1.5px solid var(--border);
+    background: var(--panel-2); color: var(--text-dim); font-weight: 700; font-size: 14px;
+    cursor: pointer; transition: all .2s;
+  }
+  .mirror-btn.on { background: var(--red-soft); color: var(--red); border-color: var(--red); }
+  .mirror-btn:hover { border-color: #60a5fa; }
+  .parity-box {
+    padding: 14px; border-radius: 10px; text-align: center;
+    border: 1.5px solid var(--border); background: var(--panel-2);
+  }
+  .parity-box.pass { border-color: var(--green); background: var(--green-soft); }
+  .parity-box.alarm { border-color: var(--red); background: var(--red-soft); }
+  .parity-box .big { font-size: 26px; font-weight: 800; margin-bottom: 4px; }
+  .parity-box.pass .big { color: var(--green); }
+  .parity-box.alarm .big { color: var(--red); }
+  .parity-box .small { font-size: 12px; color: var(--text-dim); }
+  .btn {
+    width: 100%; padding: 12px; border-radius: 8px; border: none; cursor: pointer;
+    font-weight: 700; font-size: 14px; transition: opacity .2s;
+  }
+  .btn-primary { background: var(--blue); color: white; }
+  .btn-ghost { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); margin-top: 8px; }
+  .btn:hover { opacity: .85; }
+  .axis-count { font-family: monospace; font-size: 13px; color: var(--text-dim); text-align: center; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <div id="badge" class="pass">PASS · 手性正常</div>
+    <div id="legend">
+      <div><span class="dot-x"></span>X 轴（杯子左侧 · 红）</div>
+      <div><span class="dot-y"></span>Y 轴（杯子上方 · 绿）</div>
+      <div><span class="dot-z"></span>Z 轴（可见面 / 穿出屏幕 · 蓝）</div>
+    </div>
+  </div>
+  <div id="panel">
+    <h1>三维重建奇偶校验</h1>
+    <div class="sub">杯子局部坐标系 · 旋转保持手性 · 镜像反转手性</div>
+    <div style="margin-bottom:16px"><a href="miaoci_coordinate_calibration.html" style="color:#60a5fa;font-size:13px;text-decoration:none;border-bottom:1px dashed #60a5fa;padding-bottom:1px">→ 查看缪刺法坐标系校准（左病右取机理）</a></div>
+
+    <div class="group">
+      <h3>绕轴旋转（不改变手性）</h3>
+      <div class="row"><label class="x">X</label><input type="range" id="rx" min="0" max="360" value="0"><span class="val" id="rxv">0°</span></div>
+      <div class="row"><label class="y">Y</label><input type="range" id="ry" min="0" max="360" value="0"><span class="val" id="ryv">0°</span></div>
+      <div class="row"><label class="z">Z</label><input type="range" id="rz" min="0" max="360" value="0"><span class="val" id="rzv">0°</span></div>
+    </div>
+
+    <div class="group">
+      <h3>轴镜像翻转（改变手性）</h3>
+      <div class="mirrors">
+        <button class="mirror-btn" data-axis="x">X 翻转</button>
+        <button class="mirror-btn" data-axis="y">Y 翻转</button>
+        <button class="mirror-btn" data-axis="z">Z 翻转</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <h3>奇偶校验结果</h3>
+      <div class="parity-box pass" id="parity">
+        <div class="big" id="parity-big">PASS</div>
+        <div class="small" id="parity-small">偶数轴翻转 · 手性保持</div>
+      </div>
+      <div class="axis-count" id="axis-count">翻转轴数：0</div>
+    </div>
+
+    <div class="group">
+      <h3>模拟重建</h3>
+      <button class="btn btn-primary" id="reconstruct">随机生成重建姿态并校验</button>
+      <button class="btn btn-ghost" id="reset">重置为规范姿态</button>
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ===== 单一坐标系约定（杯子局部坐标系）=====
+// +X = 杯子左侧（红）   +Y = 杯子上方（绿）   +Z = 可见面/穿出屏幕（蓝）
+const AXIS_COLOR = { x: 0xef4444, y: 0x22c55e, z: 0x3b82f6 };
+
+const stage = document.getElementById('stage');
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(45, stage.clientWidth/stage.clientHeight, 0.1, 100);
+// 规范姿态：正面（+Z 浮雕面）正对屏幕外（朝向相机），略带俯视以看见杯口
+camera.position.set(0, 0.35, 5.8);
+camera.up.set(0, 1, 0);
+camera.lookAt(0, 0, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(stage.clientWidth, stage.clientHeight);
+stage.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.target.set(0, 0, 0);
+
+// 灯光
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const dl = new THREE.DirectionalLight(0xffffff, 1.0);
+dl.position.set(3, 5, 4);
+scene.add(dl);
+const dl2 = new THREE.DirectionalLight(0x88aaff, 0.4);
+dl2.position.set(-3, -2, -3);
+scene.add(dl2);
+
+// ===== 杯子 =====
+const cupGroup = new THREE.Group();
+scene.add(cupGroup);
+
+// 杯体（实心陶瓷质感，突出浮雕）
+const cupGeo = new THREE.CylinderGeometry(0.9, 0.7, 2.0, 48, 1, true);
+const cupMat = new THREE.MeshPhysicalMaterial({
+  color: 0xe8e2d5, transparent: true, opacity: 0.82,
+  roughness: 0.35, metalness: 0.0, transmission: 0.08,
+  side: THREE.DoubleSide, clearcoat: 0.6
+});
+const cup = new THREE.Mesh(cupGeo, cupMat);
+cupGroup.add(cup);
+
+// 杯底
+const bottomGeo = new THREE.CircleGeometry(0.7, 48);
+const bottomMat = new THREE.MeshPhysicalMaterial({ color: 0xc9c0ad, side: THREE.DoubleSide, roughness: 0.5 });
+const bottom = new THREE.Mesh(bottomGeo, bottomMat);
+bottom.rotation.x = -Math.PI / 2;
+bottom.position.y = -1.0;
+cupGroup.add(bottom);
+
+// 杯口圆环
+const rimGeo = new THREE.TorusGeometry(0.9, 0.05, 12, 48);
+const rimMat = new THREE.MeshStandardMaterial({ color: 0xf5f0e3, roughness: 0.25, metalness: 0.2 });
+const rim = new THREE.Mesh(rimGeo, rimMat);
+rim.rotation.x = Math.PI / 2;
+rim.position.y = 1.0;
+cupGroup.add(rim);
+
+// 杯底圈足
+const footGeo = new THREE.TorusGeometry(0.7, 0.04, 10, 36);
+const foot = new THREE.Mesh(footGeo, rimMat);
+foot.rotation.x = Math.PI / 2;
+foot.position.y = -1.0;
+cupGroup.add(foot);
+
+// ===== 正面浮雕图案（+Z 可见面）=====
+const reliefMat = new THREE.MeshStandardMaterial({ color: 0xc89b3c, roughness: 0.4, metalness: 0.5 });
+const relief = new THREE.Group();
+relief.position.set(0, 0.1, 0.87); // 贴在杯体正面外侧
+// 浮雕底板
+const relBase = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 0.05, 36), reliefMat);
+relBase.rotation.x = Math.PI / 2;
+relief.add(relBase);
+// 外圈凹槽（深色环）
+const relRing = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.02, 8, 36),
+  new THREE.MeshStandardMaterial({ color: 0x8a6a1f, roughness: 0.6, metalness: 0.3 }));
+relRing.rotation.x = Math.PI / 2;
+relRing.position.z = 0.03;
+relief.add(relRing);
+// 放射状花瓣浮雕
+for (let i = 0; i < 8; i++) {
+  const a = (i / 8) * Math.PI * 2;
+  const petal = new THREE.Mesh(new THREE.SphereGeometry(0.075, 14, 10), reliefMat);
+  petal.position.set(Math.cos(a) * 0.17, Math.sin(a) * 0.17, 0.05);
+  petal.scale.set(1, 0.55, 0.5);
+  relief.add(petal);
+}
+// 中心凸珠
+const relCenter = new THREE.Mesh(new THREE.SphereGeometry(0.09, 18, 18), reliefMat);
+relCenter.position.set(0, 0, 0.09);
+relief.add(relCenter);
+cupGroup.add(relief);
+
+// ===== 左侧把手（杯子左 = +X = 屏幕右 = three.js +X 方向）=====
+const handleGeo = new THREE.TorusGeometry(0.34, 0.06, 16, 32, Math.PI); // 半圆环
+const handle = new THREE.Mesh(handleGeo, rimMat);
+// 半环绕 Z 转 -90° 后两端沿 Y 轴接杯壁，凸出朝 +X（杯子左侧/屏幕右侧）
+handle.rotation.z = -Math.PI / 2;
+handle.position.set(0.82, 0.0, 0);
+cupGroup.add(handle);
+// 把手与杯壁的连接球（填补半环平切端点的缝隙，使其与杯壁融为一体）
+const jointGeo = new THREE.SphereGeometry(0.062, 16, 16);
+const jointTop = new THREE.Mesh(jointGeo, rimMat);
+jointTop.position.set(0.82, 0.34, 0);
+cupGroup.add(jointTop);
+const jointBot = new THREE.Mesh(jointGeo, rimMat);
+jointBot.position.set(0.82, -0.34, 0);
+cupGroup.add(jointBot);
+
+// 右侧标记（杯子右 = -X = 屏幕左；蓝色，便于判断朝向）
+const markR = new THREE.Mesh(
+  new THREE.CircleGeometry(0.1, 24),
+  new THREE.MeshBasicMaterial({ color: 0x60a5fa })
+);
+markR.position.set(-0.9, 0.3, 0); markR.rotation.y = Math.PI / 2;
+cupGroup.add(markR);
+
+// ===== 杯子内部三维坐标系 =====
+const axesGroup = new THREE.Group();
+cupGroup.add(axesGroup);
+
+function makeAxis(dir, color, label) {
+  const len = 1.4;
+  const g = new THREE.Group();
+  const mat = new THREE.LineBasicMaterial({ color, linewidth: 2 });
+  // 双向轴线：从 -len 到 +len
+  const pts = [dir.clone().multiplyScalar(-len), dir.clone().multiplyScalar(len)];
+  const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat);
+  g.add(line);
+  // 箭头锥体
+  const headLen = 0.18, headW = 0.075;
+  const coneGeo = new THREE.ConeGeometry(headW, headLen, 14);
+  const arrowMat = new THREE.MeshBasicMaterial({ color });
+  const up = new THREE.Vector3(0, 1, 0);
+  // 正方向箭头（仅正值端有箭头）
+  const posArrow = new THREE.Mesh(coneGeo, arrowMat);
+  posArrow.position.copy(dir).multiplyScalar(len);
+  posArrow.quaternion.setFromUnitVectors(up, dir.clone().normalize());
+  g.add(posArrow);
+  // 标签（仅正方向）
+  const cvs = document.createElement('canvas'); cvs.width=64; cvs.height=64;
+  const ctx = cvs.getContext('2d');
+  ctx.fillStyle = '#'+color.toString(16).padStart(6,'0');
+  ctx.font = 'bold 44px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(label, 32, 34);
+  const tex = new THREE.CanvasTexture(cvs);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
+  sprite.position.copy(dir).multiplyScalar(len + 0.18);
+  sprite.scale.set(0.38, 0.38, 1);
+  g.add(sprite);
+  return g;
+}
+
+axesGroup.add(makeAxis(new THREE.Vector3(1, 0, 0), AXIS_COLOR.x, 'X')); // +X = 杯子左 = 屏幕右
+axesGroup.add(makeAxis(new THREE.Vector3(0, 1, 0),  AXIS_COLOR.y, 'Y')); // +Y = 上
+axesGroup.add(makeAxis(new THREE.Vector3(0, 0, 1),  AXIS_COLOR.z, 'Z')); // +Z = 穿出屏幕
+
+// 原点小球
+const origin = new THREE.Mesh(
+  new THREE.SphereGeometry(0.06, 16, 16),
+  new THREE.MeshBasicMaterial({ color: 0xffffff })
+);
+axesGroup.add(origin);
+
+// 地面网格（参考）
+const grid = new THREE.GridHelper(8, 16, 0x333844, 0x22262e);
+grid.position.y = -1.6;
+scene.add(grid);
+
+// ===== 状态 =====
+const state = { rx: 0, ry: 0, rz: 0, mx: false, my: false, mz: false };
+
+function applyTransform() {
+  // 先镜像（缩放取负），再旋转
+  cupGroup.scale.set(state.mx ? -1 : 1, state.my ? -1 : 1, state.mz ? -1 : 1);
+  cupGroup.rotation.set(
+    THREE.MathUtils.degToRad(state.rx),
+    THREE.MathUtils.degToRad(state.ry),
+    THREE.MathUtils.degToRad(state.rz)
+  );
+  updateParity();
+}
+
+function flippedCount() {
+  return (state.mx?1:0) + (state.my?1:0) + (state.mz?1:0);
+}
+
+function updateParity() {
+  const n = flippedCount();
+  const odd = n % 2 === 1;
+  const parityBox = document.getElementById('parity');
+  const badge = document.getElementById('badge');
+  const big = document.getElementById('parity-big');
+  const small = document.getElementById('parity-small');
+  document.getElementById('axis-count').textContent = `翻转轴数：${n}`;
+
+  if (odd) {
+    parityBox.className = 'parity-box alarm';
+    badge.className = 'alarm';
+    badge.textContent = '⚠ ALARM · 手性反转';
+    big.textContent = 'ALARM';
+    small.textContent = `奇数轴翻转（${n}）· 手性被破坏`;
+    cupMat.color.setHex(0xffb3b3);
+  } else {
+    parityBox.className = 'parity-box pass';
+    badge.className = 'pass';
+    badge.textContent = 'PASS · 手性正常';
+    big.textContent = 'PASS';
+    small.textContent = n === 0 ? '无轴翻转 · 规范手性' : `偶数轴翻转（${n}）· 手性保持`;
+    cupMat.color.setHex(0xdde4ee);
+  }
+}
+
+// ===== 控件绑定 =====
+['rx','ry','rz'].forEach(id => {
+  const el = document.getElementById(id);
+  el.addEventListener('input', () => {
+    state[id] = parseInt(el.value);
+    document.getElementById(id+'v').textContent = el.value + '°';
+    applyTransform();
+  });
+});
+
+document.querySelectorAll('.mirror-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const ax = btn.dataset.axis;
+    state['m'+ax] = !state['m'+ax];
+    btn.classList.toggle('on', state['m'+ax]);
+    applyTransform();
+  });
+});
+
+document.getElementById('reset').addEventListener('click', () => {
+  state.rx = state.ry = state.rz = 0;
+  state.mx = state.my = state.mz = false;
+  ['rx','ry','rz'].forEach(id => { document.getElementById(id).value = 0; document.getElementById(id+'v').textContent='0°'; });
+  document.querySelectorAll('.mirror-btn').forEach(b => b.classList.remove('on'));
+  applyTransform();
+});
+
+document.getElementById('reconstruct').addEventListener('click', () => {
+  // 模拟一次三维重建：随机旋转 + 随机镜像
+  state.rx = Math.floor(Math.random()*360);
+  state.ry = Math.floor(Math.random()*360);
+  state.rz = Math.floor(Math.random()*360);
+  state.mx = Math.random() < 0.5;
+  state.my = Math.random() < 0.5;
+  state.mz = Math.random() < 0.5;
+  ['rx','ry','rz'].forEach(id => { document.getElementById(id).value = state[id]; document.getElementById(id+'v').textContent=state[id]+'°'; });
+  document.querySelectorAll('.mirror-btn').forEach(b => {
+    const on = state['m'+b.dataset.axis];
+    b.classList.toggle('on', on);
+  });
+  applyTransform();
+});
+
+// ===== 渲染循环 =====
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize', () => {
+  camera.aspect = stage.clientWidth / stage.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(stage.clientWidth, stage.clientHeight);
+});
+
+applyTransform();
+</script>
+</body>
+</html>

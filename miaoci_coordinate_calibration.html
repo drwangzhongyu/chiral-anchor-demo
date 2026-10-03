@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>缪刺法 · 3D 坐标系校准 · 左病右取机理</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #1a1d24;
+    --panel-2: #232730;
+    --border: #2e333d;
+    --text: #e5e7eb;
+    --text-dim: #9ca3af;
+    --red: #ef4444;
+    --red-soft: rgba(239,68,68,0.15);
+    --blue: #3b82f6;
+    --blue-soft: rgba(59,130,246,0.15);
+    --green: #22c55e;
+    --green-soft: rgba(34,197,94,0.12);
+    --orange: #f59e0b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "PingFang SC", "Segoe UI", sans-serif; overflow: hidden; }
+  #app { display: grid; grid-template-columns: 1fr 340px; height: 100vh; }
+  #stage { position: relative; background: radial-gradient(circle at 50% 40%, #1c2029, #0b0d11); }
+  canvas { display: block; }
+  #badge {
+    position: absolute; top: 16px; left: 16px; padding: 8px 16px;
+    border-radius: 8px; background: rgba(0,0,0,.5); backdrop-filter: blur(6px);
+    border: 1px solid var(--border); font-size: 13px; color: var(--text-dim);
+  }
+  #badge b { color: var(--orange); }
+  #legend {
+    position: absolute; bottom: 16px; left: 16px; background: rgba(0,0,0,.5);
+    padding: 10px 14px; border-radius: 8px; font-size: 12px; line-height: 2;
+    backdrop-filter: blur(6px); border: 1px solid var(--border);
+  }
+  #legend span { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+
+  #panel { background: var(--panel); border-left: 1px solid var(--border);
+    padding: 20px; overflow-y: auto; }
+  #panel h1 { font-size: 18px; margin-bottom: 4px; }
+  #panel .sub { font-size: 12px; color: var(--text-dim); margin-bottom: 18px; line-height: 1.6; }
+
+  .mode-bar { display: flex; gap: 8px; margin-bottom: 18px; }
+  .mode-btn {
+    flex: 1; padding: 10px 8px; border-radius: 8px; border: 1.5px solid var(--border);
+    background: var(--panel-2); color: var(--text-dim); font-weight: 700;
+    font-size: 12px; cursor: pointer; transition: all .2s; text-align: center;
+  }
+  .mode-btn.active { background: var(--blue-soft); color: var(--blue); border-color: var(--blue); }
+
+  .group { margin-bottom: 18px; }
+  .group h3 { font-size: 12px; color: var(--text-dim); text-transform: uppercase;
+    letter-spacing: .06em; margin-bottom: 10px; font-weight: 600; }
+  .controls { display: flex; flex-direction: column; gap: 8px; }
+  .act-btn {
+    padding: 11px; border-radius: 8px; border: none; cursor: pointer;
+    font-weight: 700; font-size: 13px; transition: opacity .2s;
+  }
+  .act-btn.left { background: var(--red); color: white; }
+  .act-btn.right { background: var(--blue); color: white; }
+  .act-btn.reset { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+  .act-btn:hover { opacity: .85; }
+
+  .explain {
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px; font-size: 13px; line-height: 1.9;
+    min-height: 100px;
+  }
+  .explain .step { margin-bottom: 4px; }
+  .explain .tag {
+    display: inline-block; padding: 1px 7px; border-radius: 4px;
+    font-size: 11px; font-weight: 700; margin-right: 5px;
+  }
+  .tag-red { background: var(--red-soft); color: var(--red); }
+  .tag-blue { background: var(--blue-soft); color: var(--blue); }
+  .tag-green { background: var(--green-soft); color: var(--green); }
+
+  .axis-info {
+    margin-top: 14px; padding: 12px; background: var(--panel-2);
+    border-radius: 8px; font-size: 12px; color: var(--text-dim);
+    line-height: 2;
+  }
+  .axis-info .flip { color: var(--orange); font-weight: 700; }
+  .axis-info .same { color: var(--green); font-weight: 700; }
+  .axis-info b { color: var(--text); }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <div id="badge">当前体位：<b id="mode-label">面对面</b> · 可拖拽旋转视角</div>
+    <div id="legend">
+      <div><span style="background:var(--red)"></span>病机（本体循环障碍）</div>
+      <div><span style="background:var(--blue)"></span>症状 / 观测</div>
+      <div><span style="background:var(--green)"></span>针刺侧</div>
+      <div><span style="background:var(--orange);border-radius:2px;width:14px;height:3px"></span>症状→观测</div>
+      <div><span style="background:var(--green);border-radius:2px;width:14px;height:3px"></span>观测→针刺</div>
+    </div>
+  </div>
+  <div id="panel">
+    <h1>缪刺法 · 3D 坐标系校准</h1>
+    <div class="sub">本体循环与观测循环本为一体<br>体位差异造成视角差异 · 正面交叉，背面同向</div>
+
+    <div class="mode-bar">
+      <button class="mode-btn active" id="mode-face">面对面<br>（视角相反）</button>
+      <button class="mode-btn" id="mode-back">面对背<br>（同向）</button>
+    </div>
+
+    <div class="group">
+      <h3>选择通路障碍</h3>
+      <div class="controls">
+        <button class="act-btn left" id="btn-left">左升通路障碍</button>
+        <button class="act-btn right" id="btn-right">右降通路障碍</button>
+        <button class="act-btn reset" id="btn-reset">重置</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <h3>推演过程</h3>
+      <div class="explain" id="explain">
+        <div class="step"><span class="tag tag-green">提示</span>点击上方按钮选择障碍类型，观察病机、症状与针刺侧的三维映射。</div>
+      </div>
+    </div>
+
+    <div class="axis-info" id="axis-info">
+      <div>X 轴（左右）：<span class="flip">翻转</span></div>
+      <div>Z 轴（前后）：<span class="flip">翻转</span></div>
+      <div>翻转轴数：<b style="color:var(--orange)">2（偶数）</b> · 手性不变，视角相反</div>
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const stage = document.getElementById('stage');
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(40, stage.clientWidth/stage.clientHeight, 0.1, 100);
+camera.position.set(0, 1.2, 7);
+camera.up.set(0, 1, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(stage.clientWidth, stage.clientHeight);
+stage.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.target.set(0, 0.5, 0);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+const dl = new THREE.DirectionalLight(0xffffff, 1.0);
+dl.position.set(3, 6, 4);
+scene.add(dl);
+const dl2 = new THREE.DirectionalLight(0x88aaff, 0.4);
+dl2.position.set(-3, 2, -3);
+scene.add(dl2);
+
+// 地面参考
+const grid = new THREE.GridHelper(12, 24, 0x333844, 0x1f232b);
+grid.position.y = -1.5;
+scene.add(grid);
+
+// ===== 人物构建 =====
+function createPerson(isDoctor) {
+  const g = new THREE.Group();
+  const skin = new THREE.MeshStandardMaterial({ color: 0xe8b890, roughness: 0.7 });
+  const hair = new THREE.MeshStandardMaterial({ color: 0x2a1a10, roughness: 0.8 });
+  const clothColor = isDoctor ? 0xf0f0f0 : 0x4a6fa5;
+  const cloth = new THREE.MeshStandardMaterial({ color: clothColor, roughness: 0.6 });
+  const pants = new THREE.MeshStandardMaterial({ color: isDoctor ? 0x2a3a5a : 0x3a3a4a, roughness: 0.7 });
+
+  // 头
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 24, 24), skin);
+  head.position.y = 1.55;
+  g.add(head);
+  // 短发（贴合头顶，非帽状）
+  const hairMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(0.225, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.42),
+    hair
+  );
+  hairMesh.position.y = 1.56;
+  g.add(hairMesh);
+
+  // 面部特征（正面 +Z 侧）
+  const eyeMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.5 });
+  const eyeGeo = new THREE.SphereGeometry(0.025, 12, 12);
+  const eyeL = new THREE.Mesh(eyeGeo, eyeMat);
+  eyeL.position.set(-0.07, 1.59, 0.2);
+  g.add(eyeL);
+  const eyeR = new THREE.Mesh(eyeGeo, eyeMat);
+  eyeR.position.set(0.07, 1.59, 0.2);
+  g.add(eyeR);
+  // 鼻子
+  const nose = new THREE.Mesh(
+    new THREE.ConeGeometry(0.025, 0.06, 8), skin
+  );
+  nose.position.set(0, 1.52, 0.24);
+  nose.rotation.x = Math.PI;
+  g.add(nose);
+  // 嘴巴
+  const mouth = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.04, 0.04, 0.012, 12),
+    new THREE.MeshStandardMaterial({ color: 0xc25a5a, roughness: 0.6 })
+  );
+  mouth.position.set(0, 1.45, 0.21);
+  mouth.rotation.x = Math.PI / 2;
+  g.add(mouth);
+  // 医生戴眼镜
+  if (isDoctor) {
+    const glassMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.3, metalness: 0.6 });
+    const lensGeo = new THREE.TorusGeometry(0.06, 0.01, 8, 16);
+    const lensL = new THREE.Mesh(lensGeo, glassMat);
+    lensL.position.set(-0.07, 1.59, 0.21);
+    g.add(lensL);
+    const lensR = new THREE.Mesh(lensGeo, glassMat);
+    lensR.position.set(0.07, 1.59, 0.21);
+    g.add(lensR);
+    const bridge = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.006, 0.006, 0.06, 6), glassMat
+    );
+    bridge.position.set(0, 1.59, 0.21);
+    bridge.rotation.z = Math.PI / 2;
+    g.add(bridge);
+  }
+
+  // 脖子
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, 0.12, 12), skin);
+  neck.position.y = 1.32;
+  g.add(neck);
+
+  // 躯干（白大褂/衣服）
+  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.28, 0.55, 8, 16), cloth);
+  torso.position.y = 0.95;
+  g.add(torso);
+
+  // 手臂
+  const armGeo = new THREE.CapsuleGeometry(0.07, 0.5, 6, 12);
+  const armL = new THREE.Mesh(armGeo, cloth);
+  armL.position.set(-0.36, 0.95, 0);
+  armL.rotation.z = 0.12;
+  g.add(armL);
+  const armR = new THREE.Mesh(armGeo, cloth);
+  armR.position.set(0.36, 0.95, 0);
+  armR.rotation.z = -0.12;
+  g.add(armR);
+  // 手
+  const handGeo = new THREE.SphereGeometry(0.08, 12, 12);
+  const handL = new THREE.Mesh(handGeo, skin);
+  handL.position.set(-0.42, 0.62, 0);
+  g.add(handL);
+  const handR = new THREE.Mesh(handGeo, skin);
+  handR.position.set(0.42, 0.62, 0);
+  g.add(handR);
+
+  // 腿
+  const legGeo = new THREE.CapsuleGeometry(0.09, 0.55, 6, 12);
+  const legL = new THREE.Mesh(legGeo, pants);
+  legL.position.set(-0.14, 0.2, 0);
+  g.add(legL);
+  const legR = new THREE.Mesh(legGeo, pants);
+  legR.position.set(0.14, 0.2, 0);
+  g.add(legR);
+
+  // 医生：白色医生帽
+  if (isDoctor) {
+    const capMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 });
+    // 帽顶（扁圆柱）
+    const capTop = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.2, 0.22, 0.06, 24), capMat
+    );
+    capTop.position.set(0, 1.72, 0);
+    g.add(capTop);
+    // 帽檐（圆环）
+    const brim = new THREE.Mesh(
+      new THREE.TorusGeometry(0.22, 0.03, 8, 24), capMat
+    );
+    brim.position.set(0, 1.69, 0);
+    brim.rotation.x = Math.PI / 2;
+    g.add(brim);
+  }
+
+  return g;
+}
+
+// ===== 气机循环（3D 圆环 + 流动粒子）=====
+function createCycle(color) {
+  const g = new THREE.Group();
+  // 圆环管道（半透明）
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(0.5, 0.018, 12, 48),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.35 })
+  );
+  ring.rotation.x = 0; // 圆环在 XY 平面
+  g.add(ring);
+
+  // 流动粒子：沿圆环分布的小球
+  const particles = [];
+  const pMat = new THREE.MeshBasicMaterial({ color });
+  for (let i = 0; i < 8; i++) {
+    const p = new THREE.Mesh(new THREE.SphereGeometry(0.035, 10, 10), pMat);
+    p.userData.phase = (i / 8) * Math.PI * 2;
+    g.add(p);
+    particles.push(p);
+  }
+  g.userData.particles = particles;
+  return g;
+}
+
+// 更新粒子流动
+// 模型自身左升右降（顺时针）；从相机面对面看呈现逆时针
+function updateCycle(cycle, time) {
+  const particles = cycle.userData.particles;
+  const r = 0.5;
+  particles.forEach(p => {
+    const a = p.userData.phase + time * 0.8;
+    p.position.set(Math.cos(a) * r, Math.sin(a) * r, 0);
+  });
+}
+
+// ===== 标记点（病机/症状/针刺）=====
+function createMarker(color, isRing = false) {
+  if (isRing) {
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.12, 0.015, 8, 24),
+      new THREE.MeshBasicMaterial({ color })
+    );
+    return ring;
+  }
+  return new THREE.Mesh(
+    new THREE.SphereGeometry(0.08, 16, 16),
+    new THREE.MeshBasicMaterial({ color })
+  );
+}
+
+// ===== 创建场景人物 =====
+const patient = createPerson(false);
+patient.position.set(0, 0, -2);
+scene.add(patient);
+
+const doctor = createPerson(true);
+doctor.position.set(0, 0, 2);
+scene.add(doctor);
+
+// 气机循环（放在人物前方作为子对象）
+const patientCycle = createCycle(0xef4444);
+patientCycle.position.set(0, 1.0, 0.7); // 患者前方
+patient.add(patientCycle);
+
+const doctorCycle = createCycle(0x3b82f6);
+doctorCycle.position.set(0, 1.0, -0.7); // 医生前方（医生面朝 -Z）
+doctor.add(doctorCycle);
+
+// 标记点 group
+const markers = new THREE.Group();
+scene.add(markers);
+
+// ===== 状态 =====
+let mode = 'face';
+let state = null;
+
+// ===== 体位设置 =====
+function setMode(m) {
+  mode = m;
+  if (m === 'face') {
+    // 面对面：患者在后面朝+Z（朝医生/相机），医生在前后面朝-Z（朝患者），互相对视
+    patient.position.set(0, 0, 0.5);
+    patient.rotation.y = 0;
+    doctor.position.set(0, 0, 4.0);
+    doctor.rotation.y = Math.PI;
+    document.getElementById('mode-label').textContent = '面对面';
+  } else {
+    // 面对背：医生在+Z，患者在-Z，均面朝-Z，医生面对患者背部
+    doctor.position.set(0, 0, 2.0);
+    doctor.rotation.y = Math.PI;
+    patient.position.set(0, 0, -2.5);
+    patient.rotation.y = Math.PI;
+    document.getElementById('mode-label').textContent = '面对背';
+  }
+  updateMarkers();
+  updateExplain();
+  updateAxisInfo();
+}
+
+// ===== 标记点位置计算 =====
+// 循环中心在人物前方，半径 0.5，在 XY 平面
+// isTop: true=上方(升), false=下方(降), null=中部
+// 局部坐标：左=-X, 右=+X, 升=+Y, 降=-Y
+function getCyclePoint(person, isLeft, isTop) {
+  person.updateWorldMatrix(true, true);
+  const sign = person === patient ? 1 : -1;
+  const centerLocal = new THREE.Vector3(0, 1.0, sign * 0.7);
+  const center = centerLocal.clone().applyMatrix4(person.matrixWorld);
+
+  // 局部坐标偏移（人物自身坐标系：面朝+Z时，左=+X，右=-X）
+  const xDir = isLeft ? 1 : -1;
+  const yDir = isTop === null ? 0 : (isTop ? 1 : -1);
+  const offset = new THREE.Vector3(xDir * 0.5, yDir * 0.35, 0);
+  // 旋转到世界坐标
+  offset.applyQuaternion(person.quaternion);
+  return center.add(offset);
+}
+
+function updateMarkers() {
+  // 清除旧标记
+  while (markers.children.length) markers.remove(markers.children[0]);
+  if (!state) return;
+
+  const isLeft = state === 'left';
+
+  // 病机点：左升障碍→左升，右降障碍→右降
+  const pathogenPos = getCyclePoint(patient, isLeft, isLeft);
+  const pathogen = createMarker(0xef4444);
+  pathogen.position.copy(pathogenPos);
+  markers.add(pathogen);
+
+  // 医生观测点：与病机同侧同高度（患者左升=医生左升，患者右降=医生右降）
+  const obsPos = getCyclePoint(doctor, isLeft, isLeft);
+  const obs = createMarker(0x3b82f6);
+  obs.position.copy(obsPos);
+  obs.scale.setScalar(0.7);
+  markers.add(obs);
+
+  // 症状点：面对面映射回对侧，面对背同侧
+  const symIsLeft = mode === 'face' ? !isLeft : isLeft;
+  const symPos = getCyclePoint(patient, symIsLeft, isLeft);
+  const symptom = createMarker(0x3b82f6);
+  symptom.position.copy(symPos);
+  symptom.scale.setScalar(0.7);
+  markers.add(symptom);
+
+  // 针刺点：病机侧（与病机重合，用圆环标记）
+  const needle = createMarker(0x22c55e, true);
+  needle.position.copy(pathogenPos);
+  markers.add(needle);
+
+  // 映射线 1（橙色）：病机 → 医生观测（交叉到医生气机）
+  const line1Geo = new THREE.BufferGeometry().setFromPoints([pathogenPos, obsPos]);
+  const line1 = new THREE.Line(line1Geo, new THREE.LineDashedMaterial({
+    color: 0xf59e0b, dashSize: 0.12, gapSize: 0.08
+  }));
+  line1.computeLineDistances();
+  markers.add(line1);
+
+  // 映射线 2（绿色）：医生观测 → 症状（映射回患者对侧）
+  const line2Geo = new THREE.BufferGeometry().setFromPoints([obsPos, symPos]);
+  const line2 = new THREE.Line(line2Geo, new THREE.LineDashedMaterial({
+    color: 0x22c55e, dashSize: 0.12, gapSize: 0.08
+  }));
+  line2.computeLineDistances();
+  markers.add(line2);
+}
+
+// ===== 解释文字 =====
+function updateExplain() {
+  const ex = document.getElementById('explain');
+  if (!state) {
+    ex.innerHTML = '<div class="step"><span class="tag tag-green">提示</span>点击上方按钮选择障碍类型，观察病机、症状与针刺侧的三维映射。</div>';
+    return;
+  }
+  const isLeft = state === 'left';
+  const pathName = isLeft ? '左升通路' : '右降通路';
+  const pathSide = isLeft ? '左' : '右';
+  const symSide = isLeft ? '右' : '左';
+  const obsSide = pathSide;
+
+  if (mode === 'face') {
+    ex.innerHTML = `
+      <div class="step"><span class="tag tag-red">病机</span>患者${pathName}障碍 → 本体循环${pathSide}侧（屏幕${isLeft ? '右' : '左'}）</div>
+      <div class="step"><span class="tag tag-blue">观测</span>交叉映射到医生${obsSide}侧（屏幕${isLeft ? '左' : '右'}）</div>
+      <div class="step"><span class="tag tag-blue">症状</span>再映射回患者${symSide}侧（屏幕${isLeft ? '左' : '右'}）</div>
+      <div class="step"><span class="tag tag-green">针刺</span>病机在${pathSide}侧 → 针患者${pathSide}侧</div>
+      <div class="step" style="margin-top:6px;color:var(--orange)"><b>→「${isLeft ? '左病右取' : '右病左取'}」</b>（症状在${symSide}，针在${pathSide}）</div>
+    `;
+  } else {
+    ex.innerHTML = `
+      <div class="step"><span class="tag tag-red">病机</span>患者${pathName}障碍 → 本体循环${pathSide}侧</div>
+      <div class="step"><span class="tag tag-blue">观测</span>面对背同向，观测与病机同侧</div>
+      <div class="step"><span class="tag tag-blue">症状</span>症状与病机同侧，在患者${pathSide}侧</div>
+      <div class="step"><span class="tag tag-green">针刺</span>针患者${pathSide}侧 = 病机侧</div>
+      <div class="step" style="margin-top:6px;color:var(--green)"><b>→「同侧取穴」</b></div>
+    `;
+  }
+}
+
+function updateAxisInfo() {
+  const info = document.getElementById('axis-info');
+  if (mode === 'face') {
+    info.innerHTML = `
+      <div>X 轴（左右）：<span class="flip">翻转</span></div>
+      <div>Z 轴（前后）：<span class="flip">翻转</span></div>
+      <div>翻转轴数：<b style="color:var(--orange)">2（偶数）</b> · 手性不变，视角相反</div>
+    `;
+  } else {
+    info.innerHTML = `
+      <div>X 轴（左右）：<span class="same">不变</span></div>
+      <div>Z 轴（前后）：<span class="same">不变</span></div>
+      <div>翻转轴数：<b style="color:var(--green)">0（偶数）</b> · 坐标系重合，循环同向</div>
+    `;
+  }
+}
+
+// ===== 事件 =====
+document.getElementById('mode-face').addEventListener('click', () => {
+  document.getElementById('mode-face').classList.add('active');
+  document.getElementById('mode-back').classList.remove('active');
+  setMode('face');
+});
+document.getElementById('mode-back').addEventListener('click', () => {
+  document.getElementById('mode-back').classList.add('active');
+  document.getElementById('mode-face').classList.remove('active');
+  setMode('back');
+});
+document.getElementById('btn-left').addEventListener('click', () => { state = 'left'; updateMarkers(); updateExplain(); });
+document.getElementById('btn-right').addEventListener('click', () => { state = 'right'; updateMarkers(); updateExplain(); });
+document.getElementById('btn-reset').addEventListener('click', () => { state = null; updateMarkers(); updateExplain(); });
+
+// ===== 渲染循环 =====
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+  updateCycle(patientCycle, t);
+  updateCycle(doctorCycle, t);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize', () => {
+  camera.aspect = stage.clientWidth / stage.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(stage.clientWidth, stage.clientHeight);
+});
+
+setMode('face');
+</script>
+</body>
+</html>
